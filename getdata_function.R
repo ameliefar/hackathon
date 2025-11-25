@@ -6,11 +6,13 @@ INDIVIDUAL_DATA_PATH <- "data/individual_data.csv"
 
 SPECIES_CODE_PATH <- "data/species_codes.csv"
 
+SITE_CODES_PATH <- "data/site_codes.csv"
+
 #'Function to import dummy dataset
 getdata_dummy <- function() {
   df <- readr::read_csv(INDIVIDUAL_DATA_PATH)
   species_code <- readr::read_csv(SPECIES_CODE_PATH)
-  site_codes <- readr::read_csv("data/site_codes.csv")
+  site_codes <- readr::read_csv(SITE_CODES_PATH)
   
   # Retirer le suffixe de studyID pour obtenir siteID
   df <- df |>
