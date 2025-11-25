@@ -3,31 +3,34 @@ library(shiny)
 library(bslib)
 library(ggplot2)
 library(dplyr)
+library(plotly)
 
 
-data <- read.csv("data/individual_data.csv")
+source("getdata_function.R")
+data <- getdata_dummy()
 
 
 
-# UI
+
+# UI function
 ui <- page_sidebar(
   title = "Age distribution",
   sidebar = sidebar(
     
     # Filter by studyID
     selectInput(
-      inputId = "studyID",
-      label = "Population (studyID):",
-      choices = sort(unique(data$studyID)),
-      selected = unique(data$studyID)[1]
+      inputId = "siteName",
+      label = "Population:",
+      choices = sort(unique(data$siteName)),
+      selected = unique(data$siteName)[1]
     ),
     
     # Filter by speciesID
     selectInput(
-      inputId = "speciesID",
+      inputId = "vernacularName",
       label = "Species:",
-      choices = sort(unique(data$speciesID)),
-      selected = unique(data$speciesID)[1]
+      choices = sort(unique(data$vernacularName)),
+      selected = unique(data$vernacularName)[1]
     ),
     
     # Year slider
@@ -42,40 +45,62 @@ ui <- page_sidebar(
     )
   ),
   
-  plotOutput("distPlot")
+  plotlyOutput("distPlot")
 )
 
 
 
-# SERVER
+# SERVER function
 server <- function(input, output, session) {
   
-  # Update species dropdown when studyID changes
-  observeEvent(input$studyID, {
+  # ---- GLOBAL FIXED AGE SCALE ----
+  all_ages <- sort(unique(data$minimumAge))
+  all_ages_factor <- factor(all_ages, levels = all_ages)
+  
+  # ---- UPDATE SPECIES WHEN studyID CHANGES ----
+  observeEvent(input$siteName, {
+    
     species_available <- data %>%
-      filter(studyID == input$studyID) %>%
-      pull(speciesID) %>%
+      filter(
+        siteName == input$siteName,
+        !is.na(minimumAge)                  # only species with valid ages
+      ) %>%
+      pull(vernacularName) %>%
       unique() %>%
       sort()
     
+    if (length(species_available) == 0) species_available <- ""
+    
     updateSelectInput(
       session,
-      "speciesID",
+      "vernacularName",
       choices = species_available,
       selected = species_available[1]
     )
   })
   
-  # Update year slider for combinations of studyID or speciesID
-  observeEvent(list(input$studyID, input$speciesID), {
+  # ---- UPDATE YEAR SLIDER WHEN studyID OR speciesID CHANGES ----
+  observeEvent(list(input$siteName, input$vernacularName), {
+    
     years_available <- data %>%
       filter(
-        studyID == input$studyID,
-        speciesID == input$speciesID
+        siteName == input$siteName,
+        vernacularName == input$vernacularName,
+        !is.na(minimumAge)
       ) %>%
       pull(captureYear) %>%
       unique() %>%
       sort()
+    
+    # No valid rows → reset slider safely
+    if (length(years_available) == 0) {
+      updateSliderInput(
+        session,
+        "year",
+        min = 0, max = 0, value = 0
+      )
+      return()
+    }
     
     updateSliderInput(
       session,
@@ -86,15 +111,16 @@ server <- function(input, output, session) {
     )
   })
   
-  # Render pyramid
-  output$distPlot <- renderPlot({
+  # ---- PLOT ----
+  output$distPlot <- renderPlotly({
     
+    # Filter data; avoid invalid year=0 cases
     df <- data %>%
       filter(
-        studyID == input$studyID,
-        speciesID == input$speciesID,
-        captureYear == input$year,
-        !is.na(minimumAge)    # exclude NA ages
+        siteName == input$siteName,
+        vernacularName == input$vernacularName,
+        !is.na(minimumAge),
+        if (input$year > 0) captureYear == input$year else TRUE
       ) %>%
       group_by(observedSex, minimumAge) %>%
       summarise(count = sum(n), .groups = "drop") %>%
@@ -102,11 +128,24 @@ server <- function(input, output, session) {
         sex3 = case_when(
           observedSex == "M" ~ "M",
           observedSex == "F" ~ "F",
-          TRUE               ~ "U"   # Unknown sex
-        )
+          TRUE               ~ "U"
+        ),
+        minimumAge = factor(minimumAge, levels = levels(all_ages_factor))
       )
     
-    # Split unknown sex counts to both sides
+    # If no data → return empty plot safely
+    if (nrow(df) == 0) {
+      return(
+        plotly_empty(type = "scatter", mode = "none") %>%
+          layout(title = "No data available for this combination")
+      )
+    }
+    
+    # Always force sex3 to have M F U levels
+    df <- df %>%
+      mutate(sex3 = factor(sex3, levels = c("F", "M", "U")))
+    
+    # Split unknown sex
     df <- df %>%
       mutate(
         count_left = case_when(
@@ -118,37 +157,58 @@ server <- function(input, output, session) {
           sex3 == "F" ~ count,
           sex3 == "U" ~ ceiling(count/2),
           TRUE        ~ 0
-        ),
-        minimumAge = factor(minimumAge, levels = sort(unique(minimumAge)))
+        )
       )
     
-    # Prepare dataframe for plotting
+    # Prepare for plotting
     df_plot <- bind_rows(
-      df %>% filter(sex3 %in% c("M","U")) %>% transmute(x = count_left, y = minimumAge, sex3 = sex3),
-      df %>% filter(sex3 %in% c("F","U")) %>% transmute(x = count_right, y = minimumAge, sex3 = sex3)
+      df %>% filter(sex3 %in% c("M","U")) %>% 
+        transmute(x = count_left, y = minimumAge, sex3 = sex3, count = count),
+      df %>% filter(sex3 %in% c("F","U")) %>% 
+        transmute(x = count_right, y = minimumAge, sex3 = sex3, count = count)
     )
     
-    ggplot(df_plot, aes(x = x, y = y, fill = sex3)) +
+    # ---- COMPUTE PERCENTAGE ----
+    total_count <- sum(abs(df_plot$x))
+    df_plot <- df_plot %>%
+      mutate(percent = round(abs(x) / total_count * 100, 1))
+    
+    # ---- GGPlot ----
+    p <- ggplot(df_plot, aes(
+      x = x,
+      y = y,
+      fill = sex3,
+      text = paste0(
+        "Age: ", y,
+        "<br>Count: ", count,
+        "<br>Percent: ", percent, "%"
+      )
+    )) +
       geom_col(width = 0.8) +
       scale_x_continuous(labels = abs) +
+      scale_y_discrete(drop = FALSE, limits = levels(all_ages_factor)) +
       scale_fill_manual(
-        values = c("M" = "salmon", "F" = "skyblue", "U" = "grey50"),
-        breaks = c("M","F","U"),
-        labels = c("Male","Female","Unknown")
+        values = c("F" = "skyblue", "M" = "salmon", "U" = "grey50"),
+        breaks = c("F", "M", "U"),
+        labels = c("Female", "Male", "Unknown")
       ) +
       labs(
         x = "Count",
         y = "Age (years)",
-        title = paste(
-          "Age Pyramid —", input$speciesID, "|", input$studyID, "| Year", input$year
-        ),
+        title = paste("Age Pyramid —",
+                      input$vernacularName, "|",
+                      input$siteName, "| Year", input$year),
         fill = "Sex"
       ) +
       theme_minimal(base_size = 15)
     
-    
+    ggplotly(p, tooltip = "text")
   })
 }
 
-# Run app
+
+
+
+
+# RUN APP
 shinyApp(ui = ui, server = server)
