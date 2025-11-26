@@ -1,26 +1,14 @@
-
 library(shiny)
 library(bslib)
-library(ggplot2)
 library(dplyr)
+library(ggplot2)
 library(plotly)
-
-
-source("getdata_function.R", local=TRUE)
-data <- getdata_dummy()
 
 
 # UI function
 ui <- page_sidebar(
   title = "Sex-age pyramid",
   sidebar = sidebar(
-    # Filter by study
-    selectInput(
-      inputId = "siteName",
-      label = "Population:",
-      choices = sort(unique(data$siteName)),
-      selected = unique(data$siteName)[1]
-    ),
     
     # Filter by species
     selectInput(
@@ -28,6 +16,14 @@ ui <- page_sidebar(
       label = "Species:",
       choices = sort(unique(data$vernacularName)),
       selected = unique(data$vernacularName)[1]
+    ),
+    
+    # Filter by study
+    selectInput(
+      inputId = "siteName",
+      label = "Population:",
+      choices = sort(unique(data$siteName)),
+      selected = unique(data$siteName)[1]
     ),
     
     # Year slider
@@ -38,6 +34,8 @@ ui <- page_sidebar(
       max = max(data$captureYear),
       value = min(data$captureYear),
       step = 1,
+      round = TRUE,
+      animate = TRUE,
       sep = ""
     )
   ),
@@ -48,7 +46,10 @@ ui <- page_sidebar(
 
 # SERVER function
 server <- function(input, output, session) {
-  # Constants - Create fixed age levels from the entire dataset
+  
+  # ------------------------------------------
+  # FIXED AGE LEVELS (global)
+  # ------------------------------------------
   all_possible_ages <- sort(unique(data$minimumAge))
   fixed_age_levels <- factor(all_possible_ages, levels = all_possible_ages)
   
@@ -56,23 +57,33 @@ server <- function(input, output, session) {
   sex_labels <- c("Female", "Male", "Unknown")
   sex_colors <- c("Female" = "skyblue", "Male" = "salmon", "Unknown" = "grey50")
   
-  # Reactive updates
-  observeEvent(input$siteName, {
-    species_available <- data %>%
-      filter(siteName == input$siteName, !is.na(minimumAge)) %>%
-      pull(vernacularName) %>% unique() %>% sort()
+  # ------------------------------------------
+  # PRECOMPUTE FIXED MAX COUNTS PER POP×SPECIES
+  # ------------------------------------------
+  max_counts <- data %>%
+    group_by(siteName, vernacularName) %>%
+    summarise(max_count = max(n), .groups = "drop")
+  
+  
+  # ------------------------------------------
+  # Reactive UI updates
+  # ------------------------------------------
+  observeEvent(input$vernacularName, {
+    pop_available <- data %>%
+      filter(vernacularName == input$vernacularName, !is.na(minimumAge)) %>%
+      pull(siteName) %>% unique() %>% sort()
     
     updateSelectInput(
-      session, "vernacularName",
-      choices = species_available,
-      selected = species_available[1]
+      session, "siteName",
+      choices = pop_available,
+      selected = pop_available[1]
     )
   })
   
-  observeEvent(list(input$siteName, input$vernacularName), {
+  observeEvent(list(input$vernacularName, input$siteName), {
     years_available <- data %>%
-      filter(siteName == input$siteName,
-             vernacularName == input$vernacularName,
+      filter(vernacularName == input$vernacularName,
+             siteName == input$siteName,
              !is.na(minimumAge)) %>%
       pull(captureYear) %>% unique() %>% sort()
     
@@ -86,12 +97,16 @@ server <- function(input, output, session) {
     )
   })
   
-  # Plot
+  
+  # ------------------------------------------
+  # MAIN PLOT
+  # ------------------------------------------
   output$distPlot <- renderPlotly({
-    # Filter data
+    
+    # Filter actual selected-year data
     df <- data %>%
-      filter(siteName == input$siteName,
-             vernacularName == input$vernacularName,
+      filter(vernacularName == input$vernacularName,
+             siteName == input$siteName,
              !is.na(minimumAge),
              if (input$year > 0) captureYear == input$year else TRUE) %>%
       group_by(observedSex, minimumAge) %>%
@@ -102,11 +117,9 @@ server <- function(input, output, session) {
           observedSex == "F" ~ "F",
           TRUE ~ "U"
         ),
-        # Use the fixed age levels
         minimumAge = factor(minimumAge, levels = levels(fixed_age_levels))
       )
     
-    # Return empty plot if no data
     if (nrow(df) == 0) {
       return(
         plotly_empty(type = "scatter", mode = "none") %>%
@@ -114,14 +127,20 @@ server <- function(input, output, session) {
       )
     }
     
-    # Calculate percentages
+    
+    # ------------------------------------------
+    # CALCULATE PERCENTAGES
+    # ------------------------------------------
     total_count <- sum(df$count)
     df <- df %>%
       group_by(minimumAge) %>%
       mutate(percent_age = sum(count) / total_count * 100) %>%
       ungroup()
     
-    # Split counts for pyramid
+    
+    # ------------------------------------------
+    # SPLIT INTO LEFT/RIGHT FOR PYRAMID
+    # ------------------------------------------
     df_plot <- df %>%
       mutate(
         count_left = case_when(
@@ -136,22 +155,36 @@ server <- function(input, output, session) {
         ),
         sex_label = case_when(
           sex3 == "F" ~ "Female",
-          sex3 == "M" ~ "Male", 
+          sex3 == "M" ~ "Male",
           sex3 == "U" ~ "Unknown"
         )
       )
     
-    # Prepare plotting dataframe
     df_plot <- bind_rows(
       df_plot %>%
         filter(sex3 %in% c("M", "U")) %>%
         transmute(x = count_left, y = minimumAge, sex_label, count, percent_age),
+      
       df_plot %>%
         filter(sex3 %in% c("F", "U")) %>%
         transmute(x = count_right, y = minimumAge, sex_label, count, percent_age)
     )
     
-    # Add faded filler for missing sexes
+    
+    # ------------------------------------------
+    # FIX: Get fixed max for this pop × species
+    # ------------------------------------------
+    fixed_max <- max_counts %>%
+      filter(vernacularName == input$vernacularName,
+             siteName == input$siteName,) %>%
+      pull(max_count)
+    
+    if (length(fixed_max) == 0 || is.na(fixed_max)) fixed_max <- 1
+    
+    
+    # ------------------------------------------
+    # ADD FADED FILLER FOR MISSING SEXES
+    # ------------------------------------------
     present_sexes <- unique(df_plot$sex_label[df_plot$x != 0])
     missing_sexes <- setdiff(sex_labels, present_sexes)
     
@@ -161,35 +194,47 @@ server <- function(input, output, session) {
         y = factor(levels(fixed_age_levels)[1], levels = levels(fixed_age_levels)),
         x = 0, count = 0, percent_age = 0, alpha = 0.15
       )
-      df_plot <- bind_rows(mutate(df_plot, alpha = 1), filler)
+      df_plot$alpha <- 1
+      df_plot <- bind_rows(df_plot, filler)
     } else {
       df_plot$alpha <- 1
     }
     
-    # Create plot with FIXED y-axis scale
+    
+    # ------------------------------------------
+    # BUILD GGplot WITH FIXED X SCALE
+    # ------------------------------------------
     p <- ggplot(df_plot, aes(
       x = x, y = y, fill = sex_label, alpha = alpha,
-      text = paste0("Age: ", y, "<br>Count: ", count, 
+      text = paste0("Age: ", y, "<br>Count: ", count,
                     "<br>Percent: ", sprintf("%.1f", percent_age), "%")
     )) +
       geom_col(width = 0.8) +
       scale_alpha_identity() +
-      scale_x_continuous(labels = abs) +
+      scale_x_continuous(
+        labels = abs,
+        limits = c(-fixed_max, fixed_max)   # << FIXED SCALE HERE
+      ) +
       scale_y_discrete(
         drop = FALSE,
         limits = levels(fixed_age_levels),  # Use the fixed levels
         breaks = c(levels(fixed_age_levels)[1], levels(fixed_age_levels)[length(levels(fixed_age_levels))])  # Only show min and max
       ) +
       scale_fill_manual(values = sex_colors, breaks = sex_labels, drop = FALSE) +
-      labs(x = "Count", y = "Age (years)", 
-           title = paste(input$vernacularName, "|", input$siteName, "| Year", input$year),
-           fill = "Sex") +
+      labs(
+        x = "Count", y = "Age (years)",
+        title = "",
+        fill = "Sex"
+      ) +
       theme_minimal(base_size = 15)
     
-    # Convert to Plotly and adjust legend opacity
+    
+    # ------------------------------------------
+    # CONVERT TO PLOTLY
+    # ------------------------------------------
     p_ly <- ggplotly(p, tooltip = "text")
     
-    # Apply opacity to missing sexes in legend
+    # Fade legend entries for missing sexes
     for (i in seq_along(p_ly$x$data)) {
       if (!is.null(p_ly$x$data[[i]]$name) && p_ly$x$data[[i]]$name %in% missing_sexes) {
         p_ly$x$data[[i]]$marker$opacity <- 0.15
