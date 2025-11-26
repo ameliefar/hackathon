@@ -14,9 +14,6 @@ getdata_dummy <- function() {
   species_code <- readr::read_csv(SPECIES_CODE_PATH)
   site_codes <- readr::read_csv(SITE_CODES_PATH)
   
-  # Retirer le suffixe de studyID pour obtenir siteID
-  df <- df |>
-    mutate(siteID = sub("-.*$", "", studyID))
   
   # Ajouter le nom vernaculaire
   df <- df |>
