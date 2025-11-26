@@ -1,58 +1,179 @@
-### ---------------------------------------------------------
-### Creating the dummy dataset with simulation
-### ---------------------------------------------------------
+### ------------------------------------------------------------ ###
+### Creating data simulation to the age distribution visualisation #
+### ------------------------------------------------------------ ###
 
-set.seed(123)   # pour reproductibilité
+set.seed(123)
 
-# Nombre de lignes désirées
-N <- 5000
+### -----------------------------------------------------------
+### 1. Rules definition
+### -----------------------------------------------------------
 
-# Variables catégorielles
-siteID_levels <- c("AMM", "BAN", "CHO", "HAR", "HOC", "KEV", "MIA", "CAC")
-species_levels <- c("STEHIR", "STRALU", "MACGIG", "HAEOST", "PARMAJ", "CERBRA")
-sex_levels <- c("F", "M", "U")
-
-# Fonction pour générer captureYear selon speciesID (distributions différentes)
-gen_year_by_species <- function(species) {
-  if (species %in% c("CERBRA", "PARMAJ")) {
-    # espèces plus récentes
-    return(sample(1980:2025, 1, prob = dpois(1:length(1980:2025), lambda=20)))
-  } else if (species %in% c("HAEOST", "STRALU", "STEHIR")) {
-    # espèces présentes longtemps
-    return(sample(1935:2025, 1, prob = dnorm(1935:2025, mean=1980, sd=20)))
-  } else {
-    # MACGIG distribution intermédiaire
-    return(sample(1950:2025, 1, prob = dnorm(1950:2025, mean=1990, sd=15)))
-  }
-}
-
-# Fonction pour générer l'âge selon les contraintes
-gen_age <- function(species) {
-  if (species %in% c("CERBRA", "PARMAJ")) {
-    return(sample(0:15, 1))
-  } else if (species %in% c("HAEOST", "STRALU", "STEHIR")) {
-    return(sample(0:35, 1))
-  } else {
-    return(sample(0:65, 1))  # cas général
-  }
-}
-
-# Génération du tableau
-data_sim <- data.frame(
-  siteID       = sample(siteID_levels, N, replace = TRUE),
-  speciesID    = sample(species_levels, N, replace = TRUE),
-  observedSex  = sample(sex_levels, N, replace = TRUE),
-  stringsAsFactors = FALSE
+species_by_site <- list(
+  AMM = c("STRALU", "CERBRA"),
+  BAN = c("MACGIG"),
+  CHO = c("STEHIR", "HAEOST"),
+  HAR = c("STRALU", "CERBRA", "STEHIR"),
+  KEV = c("STRALU", "CERBRA", "PARMAJ"),
+  MIA = c("STRALU", "PARMAJ"),
+  CAC = c("CERBRA", "PARMAJ")
 )
 
-# Ajout des colonnes dépendant de speciesID
-data_sim$captureYear <- sapply(data_sim$speciesID, gen_year_by_species)
-data_sim$minimumAge  <- sapply(data_sim$speciesID, gen_age)
+year_ranges <- list(
+  AMM = c(1935:1960, 1975:1990),
+  BAN = 2010:2025,
+  CHO = c(1978:2002, 2021:2025),
+  HAR = 1995:2025,
+  KEV = 2022:2025,
+  MIA = 2017:2024,
+  CAC = 1982:2019
+)
 
-# Variable n entre 0 et 1500
-data_sim$n <- sample(0:1500, N, replace = TRUE)
+age_ranges <- list(
+  STRALU = 0:35,
+  CERBRA = 0:10,
+  MACGIG = 0:65,
+  STEHIR = 0:22,
+  HAEOST = 0:33,
+  PARMAJ = 0:10
+)
 
-# Aperçu
-head(data_sim)
 
-write.table(data_sim, "data/individual_data.csv", sep = ",", row.names = FALSE, fileEncoding = "UTF-8")
+### -----------------------------------------------------------
+### 2. Grid: 
+###    - age=0 → observedSex = NA (1 row)
+###    - age>0 → M + F (2 rows)
+### -----------------------------------------------------------
+
+df_list <- list()
+
+for (site in names(species_by_site)) {
+  for (sp in species_by_site[[site]]) {
+    years <- year_ranges[[site]]
+    ages  <- age_ranges[[sp]]
+    
+    for (yr in years) {
+      for (age in ages) {
+        
+        if (age == 0) {
+          df_list[[length(df_list)+1]] <- data.frame(
+            siteID      = site,
+            speciesID   = sp,
+            captureYear = yr,
+            minimumAge  = age,
+            observedSex = NA,
+            stringsAsFactors = FALSE
+          )
+          
+        } else {
+          for (sx in c("M", "F")) {
+            df_list[[length(df_list)+1]] <- data.frame(
+              siteID      = site,
+              speciesID   = sp,
+              captureYear = yr,
+              minimumAge  = age,
+              observedSex = sx,
+              stringsAsFactors = FALSE
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+df <- do.call(rbind, df_list)
+row.names(df) <- NULL
+
+
+### -----------------------------------------------------------
+### 3. Randomly adding rows with observedSex "U" when age > 0
+###    - ~3% of combination → one suplementary "U" 
+### -----------------------------------------------------------
+
+# Setting rules to get unique combination for which it is possible to add "U"
+combos <- unique(df[df$minimumAge > 0, c("siteID", "speciesID", "captureYear", "minimumAge")])
+
+# Selecting combinations to be supplemented
+prop_U <- 0.03   # proportion (adjustable if necessary)
+n_U <- round(nrow(combos) * prop_U)
+
+chosen <- combos[sample(nrow(combos), n_U), ]
+
+# Creating "U" rows
+df_U <- chosen
+df_U$observedSex <- "U"
+
+# Add them to dataset
+df <- rbind(df, df_U)
+
+
+### -----------------------------------------------------------
+### 4. Generating n (theoretical values according to rules)
+### -----------------------------------------------------------
+
+generate_n_base <- function(sp, age) {
+  
+  if (age == 0) {
+    if (sp == "STRALU") return(sample(30:50,1))
+    if (sp == "CERBRA") return(sample(150:200,1))
+    if (sp == "MACGIG") return(sample(50:200,1))
+    if (sp == "STEHIR") return(sample(500:1897,1))
+    if (sp == "HAEOST") return(sample(3000:12000,1))
+    if (sp == "PARMAJ") return(sample(200:450,1))
+  }
+  
+  if (sp == "STRALU") {
+    if (age > 20) return(sample(0:10,1))
+    return(sample(10:50,1))
+  }
+  
+  if (sp == "CERBRA") {
+    return(max(0, 50 - age*5))
+  }
+  
+  if (sp == "MACGIG") {
+    if (age > 40) return(sample(0:80,1))
+    return(sample(50:200,1))
+  }
+  
+  if (sp == "STEHIR") {
+    if (age >= 10) return(sample(0:30,1))
+    return(sample(20:100,1))
+  }
+  
+  if (sp == "HAEOST") {
+    if (age >= 17) return(sample(0:200,1))
+    return(max(0, 500 - age*20))
+  }
+  
+  if (sp == "PARMAJ") {
+    if (age >= 1) return(max(0, 50 - age*4))
+  }
+  
+  0
+}
+
+df$n_base <- mapply(generate_n_base, df$speciesID, df$minimumAge)
+
+
+### -----------------------------------------------------------
+### 5. Adding realistic stochasticity (log-normal function)
+### -----------------------------------------------------------
+
+sigma <- 0.25 # ~25% of variability
+df$n <- round(df$n_base * exp(rnorm(nrow(df), 0, sigma)))
+
+df$n[df$n < 0] <- 0
+
+df$n_base <- NULL
+
+
+
+### -----------------------------------------------------------
+### 6. Saving dataframe as a csv file
+### -----------------------------------------------------------
+
+
+write.table(df, "data/individual_data.csv", 
+            sep = ",", row.names = FALSE, fileEncoding = "UTF-8")
+
