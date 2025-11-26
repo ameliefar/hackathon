@@ -6,10 +6,8 @@ library(dplyr)
 library(plotly)
 
 
-source("getdata_function.R")
+source("getdata_function.R", local=TRUE)
 data <- getdata_dummy()
-
-
 
 
 # UI function
@@ -47,10 +45,13 @@ ui <- page_sidebar(
   plotlyOutput("distPlot")
 )
 
+
 # SERVER function
 server <- function(input, output, session) {
-  # Constants
-  all_ages <- sort(unique(data$minimumAge))
+  # Constants - Create fixed age levels from the entire dataset
+  all_possible_ages <- sort(unique(data$minimumAge))
+  fixed_age_levels <- factor(all_possible_ages, levels = all_possible_ages)
+  
   sex_levels <- c("F", "M", "U")
   sex_labels <- c("Female", "Male", "Unknown")
   sex_colors <- c("Female" = "skyblue", "Male" = "salmon", "Unknown" = "grey50")
@@ -101,7 +102,8 @@ server <- function(input, output, session) {
           observedSex == "F" ~ "F",
           TRUE ~ "U"
         ),
-        minimumAge = factor(minimumAge, levels = all_ages)
+        # Use the fixed age levels
+        minimumAge = factor(minimumAge, levels = levels(fixed_age_levels))
       )
     
     # Return empty plot if no data
@@ -156,7 +158,7 @@ server <- function(input, output, session) {
     if (length(missing_sexes) > 0) {
       filler <- data.frame(
         sex_label = missing_sexes,
-        y = factor(all_ages[1], levels = all_ages),
+        y = factor(levels(fixed_age_levels)[1], levels = levels(fixed_age_levels)),
         x = 0, count = 0, percent_age = 0, alpha = 0.15
       )
       df_plot <- bind_rows(mutate(df_plot, alpha = 1), filler)
@@ -164,7 +166,7 @@ server <- function(input, output, session) {
       df_plot$alpha <- 1
     }
     
-    # Create plot
+    # Create plot with FIXED y-axis scale
     p <- ggplot(df_plot, aes(
       x = x, y = y, fill = sex_label, alpha = alpha,
       text = paste0("Age: ", y, "<br>Count: ", count, 
@@ -175,8 +177,8 @@ server <- function(input, output, session) {
       scale_x_continuous(labels = abs) +
       scale_y_discrete(
         drop = FALSE,
-        limits = levels(all_ages_factor),
-        breaks = levels(all_ages_factor)[c(1, length(levels(all_ages_factor)))]
+        limits = levels(fixed_age_levels),  # Use the fixed levels
+        breaks = c(levels(fixed_age_levels)[1], levels(fixed_age_levels)[length(levels(fixed_age_levels))])  # Only show min and max
       ) +
       scale_fill_manual(values = sex_colors, breaks = sex_labels, drop = FALSE) +
       labs(x = "Count", y = "Age (years)", 
@@ -187,7 +189,7 @@ server <- function(input, output, session) {
     # Convert to Plotly and adjust legend opacity
     p_ly <- ggplotly(p, tooltip = "text")
     
-    # Apply opacity to missing sexes in legend (using base R instead of purrr)
+    # Apply opacity to missing sexes in legend
     for (i in seq_along(p_ly$x$data)) {
       if (!is.null(p_ly$x$data[[i]]$name) && p_ly$x$data[[i]]$name %in% missing_sexes) {
         p_ly$x$data[[i]]$marker$opacity <- 0.15
@@ -197,6 +199,7 @@ server <- function(input, output, session) {
     p_ly
   })
 }
+
 
 # RUN APP
 shinyApp(ui = ui, server = server)
