@@ -14,10 +14,9 @@ data <- getdata_dummy()
 
 # UI function
 ui <- page_sidebar(
-  title = "Age distribution",
+  title = "Sex-age pyramid",
   sidebar = sidebar(
-    
-    # Filter by studyID
+    # Filter by study
     selectInput(
       inputId = "siteName",
       label = "Population:",
@@ -25,7 +24,7 @@ ui <- page_sidebar(
       selected = unique(data$siteName)[1]
     ),
     
-    # Filter by speciesID
+    # Filter by species
     selectInput(
       inputId = "vernacularName",
       label = "Species:",
@@ -48,167 +47,156 @@ ui <- page_sidebar(
   plotlyOutput("distPlot")
 )
 
-
-
 # SERVER function
 server <- function(input, output, session) {
-  
-  # ---- GLOBAL FIXED AGE SCALE ----
+  # Constants
   all_ages <- sort(unique(data$minimumAge))
-  all_ages_factor <- factor(all_ages, levels = all_ages)
+  sex_levels <- c("F", "M", "U")
+  sex_labels <- c("Female", "Male", "Unknown")
+  sex_colors <- c("Female" = "skyblue", "Male" = "salmon", "Unknown" = "grey50")
   
-  # ---- UPDATE SPECIES WHEN studyID CHANGES ----
+  # Reactive updates
   observeEvent(input$siteName, {
-    
     species_available <- data %>%
-      filter(
-        siteName == input$siteName,
-        !is.na(minimumAge)                  # only species with valid ages
-      ) %>%
-      pull(vernacularName) %>%
-      unique() %>%
-      sort()
-    
-    if (length(species_available) == 0) species_available <- ""
+      filter(siteName == input$siteName, !is.na(minimumAge)) %>%
+      pull(vernacularName) %>% unique() %>% sort()
     
     updateSelectInput(
-      session,
-      "vernacularName",
+      session, "vernacularName",
       choices = species_available,
       selected = species_available[1]
     )
   })
   
-  # ---- UPDATE YEAR SLIDER WHEN studyID OR speciesID CHANGES ----
   observeEvent(list(input$siteName, input$vernacularName), {
-    
     years_available <- data %>%
-      filter(
-        siteName == input$siteName,
-        vernacularName == input$vernacularName,
-        !is.na(minimumAge)
-      ) %>%
-      pull(captureYear) %>%
-      unique() %>%
-      sort()
+      filter(siteName == input$siteName,
+             vernacularName == input$vernacularName,
+             !is.na(minimumAge)) %>%
+      pull(captureYear) %>% unique() %>% sort()
     
-    # No valid rows → reset slider safely
-    if (length(years_available) == 0) {
-      updateSliderInput(
-        session,
-        "year",
-        min = 0, max = 0, value = 0
-      )
-      return()
-    }
+    if (length(years_available) == 0) years_available <- 0
     
     updateSliderInput(
-      session,
-      "year",
+      session, "year",
       min = min(years_available),
       max = max(years_available),
       value = min(years_available)
     )
   })
   
-  # ---- PLOT ----
+  # Plot
   output$distPlot <- renderPlotly({
-    
-    # Filter data; avoid invalid year=0 cases
+    # Filter data
     df <- data %>%
-      filter(
-        siteName == input$siteName,
-        vernacularName == input$vernacularName,
-        !is.na(minimumAge),
-        if (input$year > 0) captureYear == input$year else TRUE
-      ) %>%
+      filter(siteName == input$siteName,
+             vernacularName == input$vernacularName,
+             !is.na(minimumAge),
+             if (input$year > 0) captureYear == input$year else TRUE) %>%
       group_by(observedSex, minimumAge) %>%
       summarise(count = sum(n), .groups = "drop") %>%
       mutate(
         sex3 = case_when(
           observedSex == "M" ~ "M",
           observedSex == "F" ~ "F",
-          TRUE               ~ "U"
+          TRUE ~ "U"
         ),
-        minimumAge = factor(minimumAge, levels = levels(all_ages_factor))
+        minimumAge = factor(minimumAge, levels = all_ages)
       )
     
-    # If no data → return empty plot safely
+    # Return empty plot if no data
     if (nrow(df) == 0) {
       return(
         plotly_empty(type = "scatter", mode = "none") %>%
-          layout(title = "No data available for this combination")
+          layout(title = "No data available for this year")
       )
     }
     
-    # Always force sex3 to have M F U levels
+    # Calculate percentages
+    total_count <- sum(df$count)
     df <- df %>%
-      mutate(sex3 = factor(sex3, levels = c("F", "M", "U")))
+      group_by(minimumAge) %>%
+      mutate(percent_age = sum(count) / total_count * 100) %>%
+      ungroup()
     
-    # Split unknown sex
-    df <- df %>%
+    # Split counts for pyramid
+    df_plot <- df %>%
       mutate(
         count_left = case_when(
           sex3 == "M" ~ -count,
-          sex3 == "U" ~ -floor(count/2),
-          TRUE        ~ 0
+          sex3 == "U" ~ -floor(count / 2),
+          TRUE ~ 0
         ),
         count_right = case_when(
           sex3 == "F" ~ count,
-          sex3 == "U" ~ ceiling(count/2),
-          TRUE        ~ 0
+          sex3 == "U" ~ ceiling(count / 2),
+          TRUE ~ 0
+        ),
+        sex_label = case_when(
+          sex3 == "F" ~ "Female",
+          sex3 == "M" ~ "Male", 
+          sex3 == "U" ~ "Unknown"
         )
       )
     
-    # Prepare for plotting
+    # Prepare plotting dataframe
     df_plot <- bind_rows(
-      df %>% filter(sex3 %in% c("M","U")) %>% 
-        transmute(x = count_left, y = minimumAge, sex3 = sex3, count = count),
-      df %>% filter(sex3 %in% c("F","U")) %>% 
-        transmute(x = count_right, y = minimumAge, sex3 = sex3, count = count)
+      df_plot %>%
+        filter(sex3 %in% c("M", "U")) %>%
+        transmute(x = count_left, y = minimumAge, sex_label, count, percent_age),
+      df_plot %>%
+        filter(sex3 %in% c("F", "U")) %>%
+        transmute(x = count_right, y = minimumAge, sex_label, count, percent_age)
     )
     
-    # ---- COMPUTE PERCENTAGE ----
-    total_count <- sum(abs(df_plot$x))
-    df_plot <- df_plot %>%
-      mutate(percent = round(abs(x) / total_count * 100, 1))
+    # Add faded filler for missing sexes
+    present_sexes <- unique(df_plot$sex_label[df_plot$x != 0])
+    missing_sexes <- setdiff(sex_labels, present_sexes)
     
-    # ---- GGPlot ----
-    p <- ggplot(df_plot, aes(
-      x = x,
-      y = y,
-      fill = sex3,
-      text = paste0(
-        "Age: ", y,
-        "<br>Count: ", count,
-        "<br>Percent: ", percent, "%"
+    if (length(missing_sexes) > 0) {
+      filler <- data.frame(
+        sex_label = missing_sexes,
+        y = factor(all_ages[1], levels = all_ages),
+        x = 0, count = 0, percent_age = 0, alpha = 0.15
       )
+      df_plot <- bind_rows(mutate(df_plot, alpha = 1), filler)
+    } else {
+      df_plot$alpha <- 1
+    }
+    
+    # Create plot
+    p <- ggplot(df_plot, aes(
+      x = x, y = y, fill = sex_label, alpha = alpha,
+      text = paste0("Age: ", y, "<br>Count: ", count, 
+                    "<br>Percent: ", sprintf("%.1f", percent_age), "%")
     )) +
       geom_col(width = 0.8) +
+      scale_alpha_identity() +
       scale_x_continuous(labels = abs) +
-      scale_y_discrete(drop = FALSE, limits = levels(all_ages_factor)) +
-      scale_fill_manual(
-        values = c("F" = "skyblue", "M" = "salmon", "U" = "grey50"),
-        breaks = c("F", "M", "U"),
-        labels = c("Female", "Male", "Unknown")
+      scale_y_discrete(
+        drop = FALSE,
+        limits = levels(all_ages_factor),
+        breaks = levels(all_ages_factor)[c(1, length(levels(all_ages_factor)))]
       ) +
-      labs(
-        x = "Count",
-        y = "Age (years)",
-        title = paste("Age Pyramid —",
-                      input$vernacularName, "|",
-                      input$siteName, "| Year", input$year),
-        fill = "Sex"
-      ) +
+      scale_fill_manual(values = sex_colors, breaks = sex_labels, drop = FALSE) +
+      labs(x = "Count", y = "Age (years)", 
+           title = paste(input$vernacularName, "|", input$siteName, "| Year", input$year),
+           fill = "Sex") +
       theme_minimal(base_size = 15)
     
-    ggplotly(p, tooltip = "text")
+    # Convert to Plotly and adjust legend opacity
+    p_ly <- ggplotly(p, tooltip = "text")
+    
+    # Apply opacity to missing sexes in legend (using base R instead of purrr)
+    for (i in seq_along(p_ly$x$data)) {
+      if (!is.null(p_ly$x$data[[i]]$name) && p_ly$x$data[[i]]$name %in% missing_sexes) {
+        p_ly$x$data[[i]]$marker$opacity <- 0.15
+      }
+    }
+    
+    p_ly
   })
 }
-
-
-
-
 
 # RUN APP
 shinyApp(ui = ui, server = server)
