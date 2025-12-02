@@ -1,2 +1,0 @@
-source('getdata_function.R')
-df <- getdata_dummy()
