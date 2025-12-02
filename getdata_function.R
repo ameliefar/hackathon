@@ -1,7 +1,11 @@
-#' Data wrangling function
+#-----------------------------------------------------#
+# Function to import data and add important variables #
+#-----------------------------------------------------#
 
+#' Packages
 library('tidyverse')
 
+#' Path to imported files
 INDIVIDUAL_DATA_PATH <- "data/individual_data.csv"
 
 SPECIES_CODE_PATH <- "data/species_codes.csv"
@@ -15,11 +19,11 @@ getdata_dummy <- function() {
   site_codes <- readr::read_csv(SITE_CODES_PATH)
   
   
-  # Ajouter le nom vernaculaire
+  # Add vernacular name
   df <- df |>
     left_join(species_code |> select(speciesID, vernacularName), by = "speciesID")
   
-  # Ajouter le nom du site
+  # Add site name
   df <- df |>
     left_join(site_codes |> select(siteID, siteName), by = "siteID")
   
