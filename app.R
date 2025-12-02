@@ -3,6 +3,10 @@ library(bslib)
 library(dplyr)
 library(ggplot2)
 library(plotly)
+library(here)
+
+source(here::here("getdata_function.R"))
+data  <- getdata_dummy()
 
 
 # UI function
