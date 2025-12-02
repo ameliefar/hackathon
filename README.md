@@ -16,6 +16,8 @@ The objective was to build a simple tool to illustrate differences in **life-his
   SPI-Birds table with species-related information.
 - **`nest_data.csv`**  
   Dataset designed to provide an additional visualization related to breeding phenology.
+- **`readme.md`**
+  readme file detailing variables within each csv file
 
 ---
 
