@@ -110,10 +110,7 @@ Based on real data but should be modified for simulated data with more variation
 
 - *`getdata_function.R`*  
   Function used to import and process data.
-
-- *`hackathon.Rproj`*  
-  RProject file associated with this repository.
-
+  
 ---
 
 # 3. How to Run the App
