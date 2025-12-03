@@ -1,2 +1,13 @@
-test.R
-.Rproj.user
+# History files
+.Rhistory
+.Rapp.history
+
+# Session Data files
+.RData
+.Ruserdata
+
+# User files
+.Rproj.user/
+
+# MacOS
+.DS_Store
