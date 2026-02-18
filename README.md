@@ -1,4 +1,4 @@
-# :bird: SPI-Birds Hackathon — November 25–26, 2025
+# :bird: SPI-Birds Hackathon — November 25–26, 2025 - blablabla
 
 This repository was created during a hackathon aimed at developing an interactive *Shiny App* to visualize *age distribution* across different bird species and locations.  
 The objective was to build a simple tool to illustrate differences in *life-history strategies*, using *long-term monitoring data* in birds.
